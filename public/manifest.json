@@ -1,0 +1,22 @@
+{
+  "name": "NPD 应对教练",
+  "short_name": "NPD教练",
+  "description": "AI 心理自助训练工具 — 识别和应对 NPD 操控模式",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8f7f4",
+  "theme_color": "#6366f1",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
