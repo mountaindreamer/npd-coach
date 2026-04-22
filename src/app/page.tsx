@@ -15,6 +15,8 @@ import {
 } from "@/lib/types";
 import { getPlayCounts, formatPlays } from "@/lib/heat";
 import AdWall from "@/components/ad-wall";
+import { getDialogueConsent, getOrCreateUserId } from "@/lib/client-identity";
+import { trackEvent } from "@/lib/telemetry";
 
 type View = "home" | "simulation-setup" | "coach-setup";
 
@@ -33,6 +35,13 @@ export default function HomePage() {
 
   useEffect(() => {
     setPlays(getPlayCounts());
+    const userId = getOrCreateUserId();
+    const consent = getDialogueConsent();
+    void trackEvent({
+      event: "page_view_home",
+      userId,
+      props: { consentDialogueCollection: consent },
+    });
   }, []);
 
   const filteredScenarios = SCENARIOS.filter(
@@ -43,7 +52,25 @@ export default function HomePage() {
     (a, b) => (plays[b.id] ?? 0) - (plays[a.id] ?? 0)
   );
 
+  useEffect(() => {
+    const userId = getOrCreateUserId();
+    void trackEvent({
+      event: "scenario_card_exposure",
+      userId,
+      props: {
+        relType: selectedRelType,
+        scenarioIds: sortedScenarios.map((s) => s.id),
+      },
+    });
+  }, [selectedRelType, sortedScenarios]);
+
   const handleScenarioClick = (scenarioId: string) => {
+    const userId = getOrCreateUserId();
+    void trackEvent({
+      event: "scenario_card_click",
+      userId,
+      props: { scenarioId, difficulty: selectedDifficulty, relType: selectedRelType },
+    });
     const count = plays[scenarioId] ?? 0;
     if (count >= HOT_THRESHOLD) {
       setPendingScenarioId(scenarioId);
@@ -287,7 +314,13 @@ export default function HomePage() {
       <div className="max-w-3xl mx-auto px-4 pb-8">
         <div className="grid md:grid-cols-2 gap-4">
           <button
-            onClick={() => setView("simulation-setup")}
+            onClick={() => {
+              void trackEvent({
+                event: "click_start_simulation",
+                userId: getOrCreateUserId(),
+              });
+              setView("simulation-setup");
+            }}
             className="bg-card border border-border rounded-2xl p-6 text-left hover:border-sim-accent hover:shadow-xl transition-all group"
           >
             <div className="w-12 h-12 rounded-xl bg-sim-accent/10 flex items-center justify-center text-2xl mb-4">
@@ -305,7 +338,13 @@ export default function HomePage() {
           </button>
 
           <button
-            onClick={() => setView("coach-setup")}
+            onClick={() => {
+              void trackEvent({
+                event: "click_start_coach",
+                userId: getOrCreateUserId(),
+              });
+              setView("coach-setup");
+            }}
             className="bg-card border border-border rounded-2xl p-6 text-left hover:border-coach-accent hover:shadow-xl transition-all group"
           >
             <div className="w-12 h-12 rounded-xl bg-coach-accent/10 flex items-center justify-center text-2xl mb-4">
@@ -344,6 +383,12 @@ export default function HomePage() {
 
         <Link
           href="/community"
+          onClick={() =>
+            void trackEvent({
+              event: "community_join_click",
+              userId: getOrCreateUserId(),
+            })
+          }
           className="flex items-center justify-between bg-card border border-border rounded-xl p-4 hover:border-coach-accent transition-all"
         >
           <div className="flex items-center gap-3">
@@ -352,6 +397,28 @@ export default function HomePage() {
               <span className="font-medium">社群运营与共创</span>
               <p className="text-xs text-muted-foreground">
                 加入社群、参与共创，提交匿名对话样本用于优化模型
+              </p>
+            </div>
+          </div>
+          <span className="text-muted-foreground">→</span>
+        </Link>
+
+        <Link
+          href="/ugc"
+          onClick={() =>
+            void trackEvent({
+              event: "ugc_entry_click",
+              userId: getOrCreateUserId(),
+            })
+          }
+          className="flex items-center justify-between bg-card border border-border rounded-xl p-4 hover:border-sim-accent transition-all"
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-xl">✏️</span>
+            <div>
+              <span className="font-medium">用户共创场景</span>
+              <p className="text-xs text-muted-foreground">
+                服务端收集与审核 UGC 场景，审核通过后可用于训练
               </p>
             </div>
           </div>

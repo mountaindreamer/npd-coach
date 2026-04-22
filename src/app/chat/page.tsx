@@ -12,6 +12,8 @@ import { saveTrainingRecord, generateId } from "@/lib/storage";
 import { CustomScenario } from "@/lib/prompts";
 import { generateShareImage, shareOrDownload, copyLink } from "@/lib/share";
 import { recordPlay } from "@/lib/heat";
+import { getDialogueConsent, getOrCreateUserId } from "@/lib/client-identity";
+import { trackEvent } from "@/lib/telemetry";
 
 function getMessageText(message: UIMessage): string {
   return message.parts
@@ -104,11 +106,15 @@ function ChatContent() {
   const [timeLeft, setTimeLeft] = useState(mode === "simulation" ? SESSION_SECONDS : -1);
   const [linkCopied, setLinkCopied] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [serverSessionId, setServerSessionId] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const autoEndTriggered = useRef(false);
   const playRecorded = useRef(false);
+  const firstMessageTracked = useRef(false);
+  const userId = useMemo(() => getOrCreateUserId(), []);
+  const consentDialogueCollection = useMemo(() => getDialogueConsent(), []);
 
   useEffect(() => {
     if (mode === "simulation" && scenarioId && !playRecorded.current) {
@@ -116,6 +122,45 @@ function ChatContent() {
       recordPlay(scenarioId);
     }
   }, [mode, scenarioId]);
+
+  useEffect(() => {
+    let mounted = true;
+    const start = async () => {
+      try {
+        const res = await fetch("/api/session/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId,
+            consentDialogueCollection,
+            mode,
+            scenarioId: scenarioId || (customScenario ? "custom" : undefined),
+            difficulty,
+          }),
+        });
+        const data = await res.json();
+        if (mounted && data.sessionId) {
+          setServerSessionId(data.sessionId);
+          void trackEvent({
+            event: "chat_session_start",
+            userId,
+            sessionId: data.sessionId,
+            props: {
+              mode,
+              scenarioId: scenarioId || (customScenario ? "custom" : ""),
+              difficulty,
+            },
+          });
+        }
+      } catch {
+        // silent
+      }
+    };
+    start();
+    return () => {
+      mounted = false;
+    };
+  }, [userId, consentDialogueCollection, mode, scenarioId, customScenario, difficulty]);
 
   const initialMessages: UIMessage[] = useMemo(() => {
     if (mode === "simulation" && customScenario) {
@@ -250,8 +295,17 @@ function ChatContent() {
     }
     const text = input;
     setInput("");
+    if (!firstMessageTracked.current) {
+      firstMessageTracked.current = true;
+      void trackEvent({
+        event: "send_first_message",
+        userId,
+        sessionId: serverSessionId || undefined,
+        props: { mode },
+      });
+    }
     sendMessage({ text });
-  }, [input, isLoading, sessionEnded, sendMessage]);
+  }, [input, isLoading, sessionEnded, sendMessage, mode, userId, serverSessionId]);
 
   const handleTopicSelect = (topic: string) => {
     setSelectedTopic(topic);
@@ -263,6 +317,7 @@ function ChatContent() {
     setSessionEnded(true);
 
     const sessionId = generateId();
+    let finalFeedback: FeedbackResult | null = null;
     const scenarioTitle =
       customScenario?.name || scenario?.title || coachModule?.title || "自由对话";
 
@@ -287,6 +342,16 @@ function ChatContent() {
         });
         const data = await res.json();
         setFeedback(data);
+        finalFeedback = data;
+        void trackEvent({
+          event: "feedback_generated",
+          userId,
+          sessionId: serverSessionId || undefined,
+          props: {
+            scenarioId: feedbackScenarioId,
+            overallScore: data?.overallScore,
+          },
+        });
 
         saveTrainingRecord({
           id: sessionId,
@@ -300,6 +365,7 @@ function ChatContent() {
         });
       } catch {
         setFeedback(null);
+        finalFeedback = null;
       }
       setLoadingFeedback(false);
       setShowDecompression(true);
@@ -314,6 +380,40 @@ function ChatContent() {
         messageCount: messages.length,
       });
     }
+
+    const cleanMessages = messages.map((m) => {
+      const text = getMessageText(m);
+      const { cleanText } = parseHP(text);
+      return { role: m.role === "assistant" ? "assistant" : "user", content: cleanText };
+    });
+    if (serverSessionId) {
+      void fetch("/api/session/end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: serverSessionId,
+          userId,
+          consentDialogueCollection,
+          durationSec: Math.round((Date.now() - startTime) / 1000),
+          messageCount: messages.length,
+          messages: cleanMessages,
+          feedbackSummary: finalFeedback
+            ? {
+                overallScore: finalFeedback.overallScore,
+                boundaryScore: finalFeedback.boundaryScore,
+                emotionalRegulation: finalFeedback.emotionalRegulation,
+                strategyEffectiveness: finalFeedback.strategyEffectiveness,
+              }
+            : undefined,
+        }),
+      });
+    }
+    void trackEvent({
+      event: "session_end",
+      userId,
+      sessionId: serverSessionId || undefined,
+      props: { mode, messageCount: messages.length },
+    });
   };
 
   const handleShare = async () => {
@@ -342,6 +442,12 @@ function ChatContent() {
     }
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
+    void trackEvent({
+      event: "copy_link_click",
+      userId,
+      sessionId: serverSessionId || undefined,
+      props: { mode, scenarioId: scenarioId || "custom-or-coach" },
+    });
   };
 
   const accentColor = mode === "simulation" ? "sim-accent" : "coach-accent";

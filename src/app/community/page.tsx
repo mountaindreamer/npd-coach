@@ -1,9 +1,32 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  getDialogueConsent,
+  getOrCreateUserId,
+  setDialogueConsent,
+} from "@/lib/client-identity";
+import { trackEvent } from "@/lib/telemetry";
 
 export default function CommunityPage() {
   const router = useRouter();
+  const userId = useMemo(() => getOrCreateUserId(), []);
+  const [consent, setConsent] = useState(false);
+
+  useEffect(() => {
+    setConsent(getDialogueConsent());
+  }, []);
+
+  const onConsentChange = (next: boolean) => {
+    setConsent(next);
+    setDialogueConsent(next);
+    void trackEvent({
+      event: "consent_dialogue_collection_changed",
+      userId,
+      props: { consentDialogueCollection: next },
+    });
+  };
 
   return (
     <main className="min-h-screen bg-background">
@@ -19,8 +42,23 @@ export default function CommunityPage() {
         <div className="bg-card border border-border rounded-2xl p-6">
           <h1 className="text-2xl font-bold mb-2">社群运营与共创</h1>
           <p className="text-sm text-muted-foreground leading-relaxed">
-            MVP 阶段先做高质量社群互动，不做 UGC 上线审核。你可以在群内收集真实匿名对话样本，
-            每周更新评测集与回归集，持续优化训练效果。
+            你可以在群内收集真实匿名对话样本，并持续更新评测集与回归集。平台已支持 UGC
+            服务端审核，可配合社群共创闭环。
+          </p>
+        </div>
+
+        <div className="bg-card border border-border rounded-2xl p-6">
+          <h2 className="text-lg font-semibold mb-3">匿名对话贡献授权</h2>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => onConsentChange(e.target.checked)}
+            />
+            我同意将本人的对话以匿名脱敏方式用于模型优化和评测集构建
+          </label>
+          <p className="text-xs text-muted-foreground mt-2">
+            可随时关闭。关闭后不再上传新的对话内容到服务端。
           </p>
         </div>
 
