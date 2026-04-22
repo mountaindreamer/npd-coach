@@ -451,6 +451,17 @@ export default function HomePage() {
           </div>
           <span className="text-muted-foreground">→</span>
         </Link>
+
+        <Link
+          href="/ops"
+          className="flex items-center justify-between bg-card border border-border rounded-xl p-4 hover:border-coach-accent transition-all"
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-xl">📈</span>
+            <span className="font-medium">运营看板</span>
+          </div>
+          <span className="text-muted-foreground">→</span>
+        </Link>
       </div>
 
       <div className="max-w-3xl mx-auto px-4 pb-8">

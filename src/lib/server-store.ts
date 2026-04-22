@@ -61,6 +61,30 @@ export interface ServerUGCScenario extends UGCScenario {
   reviewedBy?: string;
 }
 
+export interface OpsSummary {
+  generatedAt: string;
+  windowDays: number;
+  totals: {
+    users: number;
+    sessions: number;
+    endedSessions: number;
+    endRatePct: number;
+    messages: number;
+    events: number;
+    ugcPending: number;
+    ugcApproved: number;
+    ugcRejected: number;
+  };
+  funnel: {
+    homeUv: number;
+    clickUv: number;
+    firstMsgUv: number;
+    endedUv: number;
+  };
+  topScenarios: Array<{ scenarioId: string; clicks: number }>;
+  dailySessions: Array<{ day: string; sessions: number; endedSessions: number }>;
+}
+
 function uid(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -641,4 +665,221 @@ export async function incrementUGCPlay(id: string): Promise<void> {
   if (!item) return;
   item.plays += 1;
   await writeList("ugc", list);
+}
+
+function dayKey(iso: string): string {
+  return new Date(iso).toISOString().slice(0, 10);
+}
+
+export async function getOpsSummary(windowDays = 30): Promise<OpsSummary> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  if (hasPg) {
+    await ensurePgSchema();
+    const p = getPool();
+
+    const [usersRes, sessionsRes, messagesRes, eventsRes, ugcRes, funnelRes, topScenariosRes, dailyRes] =
+      await Promise.all([
+        p.query<{ count: string }>(
+          `select count(*)::text as count from users where created_at >= $1`,
+          [since.toISOString()]
+        ),
+        p.query<{ sessions: string; ended: string }>(
+          `select count(*)::text as sessions, count(*) filter (where ended_at is not null)::text as ended
+           from sessions where created_at >= $1`,
+          [since.toISOString()]
+        ),
+        p.query<{ count: string }>(
+          `select count(*)::text as count from messages where created_at >= $1`,
+          [since.toISOString()]
+        ),
+        p.query<{ count: string }>(
+          `select count(*)::text as count from events where created_at >= $1`,
+          [since.toISOString()]
+        ),
+        p.query<{ pending: string; approved: string; rejected: string }>(
+          `select
+             count(*) filter (where status='pending')::text as pending,
+             count(*) filter (where status='approved')::text as approved,
+             count(*) filter (where status='rejected')::text as rejected
+           from ugc`
+        ),
+        p.query<{ user_id: string | null; viewed_home: boolean; clicked_scenario: boolean; sent_first_message: boolean; ended_session: boolean }>(
+          `with base as (
+             select
+               user_id,
+               bool_or(event = 'page_view_home') as viewed_home,
+               bool_or(event = 'scenario_card_click') as clicked_scenario,
+               bool_or(event = 'send_first_message') as sent_first_message,
+               bool_or(event = 'session_end') as ended_session
+             from events
+             where created_at >= $1
+             group by user_id
+           )
+           select user_id, viewed_home, clicked_scenario, sent_first_message, ended_session from base`,
+          [since.toISOString()]
+        ),
+        p.query<{ scenario_id: string | null; clicks: string }>(
+          `select props ->> 'scenarioId' as scenario_id, count(*)::text as clicks
+           from events
+           where event = 'scenario_card_click'
+             and created_at >= $1
+           group by 1
+           order by count(*) desc
+           limit 10`,
+          [since.toISOString()]
+        ),
+        p.query<{ day: string; sessions: string; ended_sessions: string }>(
+          `select
+             to_char(date_trunc('day', created_at), 'YYYY-MM-DD') as day,
+             count(*)::text as sessions,
+             count(*) filter (where ended_at is not null)::text as ended_sessions
+           from sessions
+           where created_at >= $1
+           group by 1
+           order by 1 desc
+           limit 30`,
+          [since.toISOString()]
+        ),
+      ]);
+
+    const sessions = Number(sessionsRes.rows[0]?.sessions ?? 0);
+    const ended = Number(sessionsRes.rows[0]?.ended ?? 0);
+    const endRatePct = sessions > 0 ? Number(((ended / sessions) * 100).toFixed(2)) : 0;
+
+    const homeUv = funnelRes.rows.filter((r) => r.viewed_home).length;
+    const clickUv = funnelRes.rows.filter((r) => r.viewed_home && r.clicked_scenario).length;
+    const firstMsgUv = funnelRes.rows.filter(
+      (r) => r.viewed_home && r.clicked_scenario && r.sent_first_message
+    ).length;
+    const endedUv = funnelRes.rows.filter(
+      (r) => r.viewed_home && r.clicked_scenario && r.sent_first_message && r.ended_session
+    ).length;
+
+    return {
+      generatedAt: new Date().toISOString(),
+      windowDays,
+      totals: {
+        users: Number(usersRes.rows[0]?.count ?? 0),
+        sessions,
+        endedSessions: ended,
+        endRatePct,
+        messages: Number(messagesRes.rows[0]?.count ?? 0),
+        events: Number(eventsRes.rows[0]?.count ?? 0),
+        ugcPending: Number(ugcRes.rows[0]?.pending ?? 0),
+        ugcApproved: Number(ugcRes.rows[0]?.approved ?? 0),
+        ugcRejected: Number(ugcRes.rows[0]?.rejected ?? 0),
+      },
+      funnel: {
+        homeUv,
+        clickUv,
+        firstMsgUv,
+        endedUv,
+      },
+      topScenarios: topScenariosRes.rows.map((r) => ({
+        scenarioId: r.scenario_id || "unknown",
+        clicks: Number(r.clicks),
+      })),
+      dailySessions: dailyRes.rows.map((r) => ({
+        day: r.day,
+        sessions: Number(r.sessions),
+        endedSessions: Number(r.ended_sessions),
+      })),
+    };
+  }
+
+  const [users, sessions, messages, events, ugc] = await Promise.all([
+    readList<ServerUser>("users"),
+    readList<ServerSession>("sessions"),
+    readList<ServerMessage>("messages"),
+    readList<EventRecord>("events"),
+    readList<ServerUGCScenario>("ugc"),
+  ]);
+
+  const sessionsWindow = sessions.filter((s) => new Date(s.createdAt) >= since);
+  const eventsWindow = events.filter((e) => new Date(e.createdAt) >= since);
+  const messagesWindow = messages.filter((m) => new Date(m.createdAt) >= since);
+  const usersWindow = users.filter((u) => new Date(u.createdAt) >= since);
+  const ended = sessionsWindow.filter((s) => !!s.endedAt).length;
+  const endRatePct =
+    sessionsWindow.length > 0
+      ? Number(((ended / sessionsWindow.length) * 100).toFixed(2))
+      : 0;
+
+  const byUser = new Map<
+    string,
+    { home: boolean; click: boolean; first: boolean; end: boolean }
+  >();
+  for (const e of eventsWindow) {
+    if (!e.userId) continue;
+    const state = byUser.get(e.userId) ?? {
+      home: false,
+      click: false,
+      first: false,
+      end: false,
+    };
+    if (e.event === "page_view_home") state.home = true;
+    if (e.event === "scenario_card_click") state.click = true;
+    if (e.event === "send_first_message") state.first = true;
+    if (e.event === "session_end") state.end = true;
+    byUser.set(e.userId, state);
+  }
+
+  let homeUv = 0;
+  let clickUv = 0;
+  let firstMsgUv = 0;
+  let endedUv = 0;
+  for (const state of byUser.values()) {
+    if (state.home) homeUv += 1;
+    if (state.home && state.click) clickUv += 1;
+    if (state.home && state.click && state.first) firstMsgUv += 1;
+    if (state.home && state.click && state.first && state.end) endedUv += 1;
+  }
+
+  const scenarioClicks = new Map<string, number>();
+  for (const e of eventsWindow) {
+    if (e.event !== "scenario_card_click") continue;
+    const sid = String(e.props?.scenarioId ?? "unknown");
+    scenarioClicks.set(sid, (scenarioClicks.get(sid) ?? 0) + 1);
+  }
+  const topScenarios = [...scenarioClicks.entries()]
+    .map(([scenarioId, clicks]) => ({ scenarioId, clicks }))
+    .sort((a, b) => b.clicks - a.clicks)
+    .slice(0, 10);
+
+  const dayMap = new Map<string, { sessions: number; ended: number }>();
+  for (const s of sessionsWindow) {
+    const day = dayKey(s.createdAt);
+    const v = dayMap.get(day) ?? { sessions: 0, ended: 0 };
+    v.sessions += 1;
+    if (s.endedAt) v.ended += 1;
+    dayMap.set(day, v);
+  }
+  const dailySessions = [...dayMap.entries()]
+    .map(([day, v]) => ({ day, sessions: v.sessions, endedSessions: v.ended }))
+    .sort((a, b) => (a.day < b.day ? 1 : -1))
+    .slice(0, 30);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    windowDays,
+    totals: {
+      users: usersWindow.length,
+      sessions: sessionsWindow.length,
+      endedSessions: ended,
+      endRatePct,
+      messages: messagesWindow.length,
+      events: eventsWindow.length,
+      ugcPending: ugc.filter((u) => u.status === "pending").length,
+      ugcApproved: ugc.filter((u) => u.status === "approved").length,
+      ugcRejected: ugc.filter((u) => u.status === "rejected").length,
+    },
+    funnel: {
+      homeUv,
+      clickUv,
+      firstMsgUv,
+      endedUv,
+    },
+    topScenarios,
+    dailySessions,
+  };
 }
