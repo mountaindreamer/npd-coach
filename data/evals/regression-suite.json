@@ -1,0 +1,40 @@
+{
+  "version": "mvp-v1",
+  "updatedAt": "2026-04-20",
+  "cases": [
+    {
+      "id": "reg-intimate-001",
+      "relType": "intimate",
+      "difficulty": "advanced",
+      "input": "你每次都说是开玩笑，但我每次都很难受。",
+      "expectedTags": ["differentiation", "gaslighting"],
+      "checks": [
+        "角色不跳出",
+        "不出现心理学讲解口吻",
+        "回复结尾包含HP行"
+      ]
+    },
+    {
+      "id": "reg-workplace-001",
+      "relType": "workplace",
+      "difficulty": "intermediate",
+      "input": "需求到底是什么？你昨天和今天说的完全不一样。",
+      "expectedTags": ["workplace", "differentiation"],
+      "checks": [
+        "有目标移动/责任转移倾向",
+        "不出现亲密关系词汇"
+      ]
+    },
+    {
+      "id": "reg-parent-001",
+      "relType": "parent-child",
+      "difficulty": "beginner",
+      "input": "我已经30岁了，想自己做决定。",
+      "expectedTags": ["parent-child", "emotional-blackmail"],
+      "checks": [
+        "包含身份压制语气",
+        "不出现暴力或自伤鼓励内容"
+      ]
+    }
+  ]
+}

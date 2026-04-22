@@ -26,6 +26,47 @@ function getTextFromMessages(messages: UIMessage[]): string {
     .join("\n");
 }
 
+function inferIntentTags(text: string): string[] {
+  const t = text.toLowerCase();
+  const map: Array<{ tag: string; keywords: string[] }> = [
+    { tag: "gaslighting", keywords: ["记错", "没说过", "你太敏感", "脑补", "煤气灯"] },
+    { tag: "lovebomb", keywords: ["突然很好", "忽冷忽热", "情话", "挽回", "爱轰炸"] },
+    { tag: "triangulation", keywords: ["前任", "别人家", "同事", "比较", "三角"] },
+    { tag: "silent-treatment", keywords: ["不回", "冷暴力", "已读不回", "沉默"] },
+    { tag: "workplace", keywords: ["领导", "老板", "加班", "kpi", "开会", "汇报"] },
+    { tag: "parent-child", keywords: ["爸", "妈", "父母", "不孝", "别人家孩子"] },
+    { tag: "differentiation", keywords: ["是不是npd", "区分", "普通矛盾", "正常吵架"] },
+  ];
+  return map
+    .filter((it) => it.keywords.some((k) => t.includes(k)))
+    .map((it) => it.tag);
+}
+
+function topKByDifficulty(difficulty: DifficultyLevel): number {
+  if (difficulty === "advanced") return 5;
+  if (difficulty === "intermediate") return 4;
+  return 3;
+}
+
+function buildRetrievalQuery(params: {
+  recentContext: string;
+  relType: string;
+  difficulty: DifficultyLevel;
+  scenarioTitle?: string;
+  npdPattern?: string;
+}): string {
+  const { recentContext, relType, difficulty, scenarioTitle, npdPattern } = params;
+  return [
+    `关系类型:${relType}`,
+    `难度:${difficulty}`,
+    scenarioTitle ? `场景:${scenarioTitle}` : "",
+    npdPattern ? `操控模式:${npdPattern}` : "",
+    `最近对话:${recentContext}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export async function POST(req: Request) {
   const body = await req.json();
 
@@ -39,10 +80,14 @@ export async function POST(req: Request) {
 
   let systemPrompt: string;
   let relType = "intimate";
+  let retrievalScenarioTitle = "";
+  let retrievalPattern = "";
 
   if (mode === "simulation" && customScenario) {
     systemPrompt = buildCustomSimulationPrompt(customScenario, difficulty);
     relType = customScenario.relType;
+    retrievalScenarioTitle = customScenario.name;
+    retrievalPattern = customScenario.traits || customScenario.description;
   } else if (mode === "simulation" && scenarioId) {
     const scenario = getScenarioById(scenarioId);
     if (!scenario) {
@@ -50,6 +95,8 @@ export async function POST(req: Request) {
     }
     systemPrompt = buildSimulationPrompt(scenario, difficulty);
     relType = scenario.relationshipType;
+    retrievalScenarioTitle = scenario.title;
+    retrievalPattern = scenario.npdPattern;
   } else {
     systemPrompt = buildCoachPrompt();
     if (moduleId && topic) {
@@ -64,9 +111,18 @@ export async function POST(req: Request) {
   if (mode === "simulation" && messages.length > 0) {
     try {
       const recentContext = getTextFromMessages(messages);
-      const chunks = await retrieveRelevantChunks(recentContext, {
-        topK: 3,
-        tags: [relType],
+      const retrievalQuery = buildRetrievalQuery({
+        recentContext,
+        relType,
+        difficulty,
+        scenarioTitle: retrievalScenarioTitle,
+        npdPattern: retrievalPattern,
+      });
+      const intentTags = inferIntentTags(recentContext);
+      const chunks = await retrieveRelevantChunks(retrievalQuery, {
+        topK: topKByDifficulty(difficulty),
+        tags: [relType, ...intentTags, "all"],
+        priorityTags: ["differentiation", ...intentTags],
       });
 
       if (chunks.length > 0) {

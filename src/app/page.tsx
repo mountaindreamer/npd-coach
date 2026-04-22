@@ -343,15 +343,15 @@ export default function HomePage() {
         </Link>
 
         <Link
-          href="/ugc"
-          className="flex items-center justify-between bg-card border border-border rounded-xl p-4 hover:border-sim-accent transition-all"
+          href="/community"
+          className="flex items-center justify-between bg-card border border-border rounded-xl p-4 hover:border-coach-accent transition-all"
         >
           <div className="flex items-center gap-3">
-            <span className="text-xl">✏️</span>
+            <span className="text-xl">👥</span>
             <div>
-              <span className="font-medium">写下你的经历</span>
+              <span className="font-medium">社群运营与共创</span>
               <p className="text-xs text-muted-foreground">
-                把真实经历变成训练题目，审核后上线平台
+                加入社群、参与共创，提交匿名对话样本用于优化模型
               </p>
             </div>
           </div>

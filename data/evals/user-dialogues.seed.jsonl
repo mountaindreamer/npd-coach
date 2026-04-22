@@ -1,0 +1,3 @@
+{"id":"seed-001","source":"community","relType":"intimate","difficulty":"intermediate","user_input":"我只是问你为什么又已读不回，你就说我控制欲强。","intentTags":["silent-treatment","gaslighting"],"expectedBehaviors":["先否认","再反向归因","保持口语化"],"mustNot":["跳出角色解释NPD","长篇科普"]}
+{"id":"seed-002","source":"community","relType":"workplace","difficulty":"advanced","user_input":"你上周确认过这版方案，今天又说方向错了。","intentTags":["goalpost-shift","differentiation"],"expectedBehaviors":["标准变动","把问题转成能力问题"],"mustNot":["直接承认自己错误","泛化到家庭关系"]}
+{"id":"seed-003","source":"community","relType":"parent-child","difficulty":"beginner","user_input":"我想自己决定工作方向，不想再被比较。","intentTags":["emotional-blackmail","differentiation"],"expectedBehaviors":["身份压制","经验说教"],"mustNot":["暴力威胁","自伤鼓励"]}

@@ -9,6 +9,7 @@ interface IndexedChunk {
 
 let index: IndexedChunk[] | null = null;
 let indexing = false;
+const MIN_SIMILARITY = -1;
 
 function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
@@ -20,6 +21,24 @@ function cosineSimilarity(a: number[], b: number[]): number {
     normB += b[i] * b[i];
   }
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function tokenize(text: string): string[] {
+  const lowered = text.toLowerCase();
+  const wordTokens = lowered.match(/[a-z0-9]{2,}/g) ?? [];
+  const zhTokens = lowered.match(/[\u4e00-\u9fa5]{2,}/g) ?? [];
+  return [...wordTokens, ...zhTokens];
+}
+
+function lexicalOverlapScore(query: string, chunk: KnowledgeChunk): number {
+  const queryTokens = new Set(tokenize(query));
+  if (queryTokens.size === 0) return 0;
+  const chunkTokens = new Set(tokenize(`${chunk.content} ${chunk.tags.join(" ")}`));
+  let hits = 0;
+  for (const token of queryTokens) {
+    if (chunkTokens.has(token)) hits += 1;
+  }
+  return hits / queryTokens.size;
 }
 
 async function buildIndex(): Promise<IndexedChunk[]> {
@@ -62,10 +81,18 @@ export async function retrieveRelevantChunks(
   options?: {
     topK?: number;
     tags?: string[];
+    priorityTags?: string[];
+    vectorWeight?: number;
+    lexicalWeight?: number;
+    minScore?: number;
   }
 ): Promise<KnowledgeChunk[]> {
   const topK = options?.topK ?? 4;
   const filterTags = options?.tags;
+  const priorityTags = options?.priorityTags ?? [];
+  const vectorWeight = options?.vectorWeight ?? 0.72;
+  const lexicalWeight = options?.lexicalWeight ?? 0.28;
+  const minScore = options?.minScore ?? MIN_SIMILARITY;
 
   const builtIndex = await buildIndex();
 
@@ -84,12 +111,28 @@ export async function retrieveRelevantChunks(
     );
   }
 
-  const scored = candidates.map((item) => ({
-    chunk: item.chunk,
-    score: cosineSimilarity(queryEmbedding, item.embedding),
-  }));
+  const scored = candidates.map((item) => {
+    const vectorScore = cosineSimilarity(queryEmbedding, item.embedding);
+    const lexicalScore = lexicalOverlapScore(query, item.chunk);
+    const hasPriorityTag =
+      priorityTags.length > 0 &&
+      priorityTags.some((t) => item.chunk.tags.includes(t));
+    const priorityBoost = hasPriorityTag ? 0.06 : 0;
+    const score =
+      vectorScore * vectorWeight + lexicalScore * lexicalWeight + priorityBoost;
+    return {
+      chunk: item.chunk,
+      score,
+      vectorScore,
+      lexicalScore,
+      priorityBoost,
+    };
+  });
 
   scored.sort((a, b) => b.score - a.score);
 
-  return scored.slice(0, topK).map((s) => s.chunk);
+  return scored
+    .filter((s) => s.score >= minScore)
+    .slice(0, topK)
+    .map((s) => s.chunk);
 }
